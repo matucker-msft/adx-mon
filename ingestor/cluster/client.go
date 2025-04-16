@@ -1,7 +1,7 @@
 package cluster
 
 import (
-	"bufio"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -128,10 +128,16 @@ func NewClient(opts ClientOpts) (*Client, error) {
 // merged into the first file at the destination.  This ensures we transfer the full batch
 // atomimcally.
 func (c *Client) Write(ctx context.Context, endpoint string, filename string, body io.Reader) error {
+	pr, pw := io.Pipe()
+	gw := gzip.NewWriter(pw)
 
-	br := bufio.NewReaderSize(body, 4*1024)
+	go func() {
+		defer pw.Close()
+		defer gw.Close()
+		_, _ = io.Copy(gw, body)
+	}()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/transfer", endpoint), br)
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/transfer", endpoint), pr)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
@@ -140,6 +146,7 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 	req.URL.RawQuery = params.Encode()
 
 	req.Header.Set("Content-Type", "text/csv")
+	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("User-Agent", "adx-mon")
 
 	resp, err := c.httpClient.Do(req)

@@ -1,6 +1,7 @@
 package ingestor
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -377,10 +378,19 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		originalIP = r.RemoteAddr
 	}
 
-	body := reader.NewCounterReader(r.Body)
+	var rawBody io.ReadCloser = r.Body
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		gzr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			http.Error(w, "failed to decode gzip", http.StatusBadRequest)
+			return
+		}
+		rawBody = gzr
+	}
+
+	body := reader.NewCounterReader(rawBody)
 	defer func() {
 		io.Copy(io.Discard, body)
-
 		metrics.RequestsBytesReceived.Add(float64(body.Count()))
 		dur := time.Since(start)
 		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
